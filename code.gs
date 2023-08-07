@@ -1,91 +1,165 @@
+//----------キャッシュ------------------------------------------------------------------------------------
+var cache = CacheService.getScriptCache();
+//------------------------------------------------------------------------------------------------------
+
+
 function RSSread() {
-  var Mastodon = "https://unnerv.jp/" + "※1";　　　//https://unnerv.jp/about/more から※1を指定
-  var feedURL  = Mastodon + ".atom";//取得したいRSSのURL化
-  var now      = new Date();
-  var nowdate  = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss')
-  
-  
-  var message = "";
-  var text    = "";
-  
-  var xml      = UrlFetchApp.fetch(feedURL).getContentText()
+  var now = new Date();
+  var nowdate = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss')
+  var Cache_PostID = cache.get('Cache_PostID');
+  Logger.log(Cache_PostID);
+
+
+  if (Cache_PostID == null) {
+    return;
+  }
+
+  var Write_data = [];
+
+  var xml = UrlFetchApp.fetch("https://unnerv.jp/@UN_NERV.rss").getContentText()
+  //Logger.log(xml);
   var document = XmlService.parse(xml)
-  var root     = document.getRootElement()
-  var atom     = XmlService.getNamespace('http://www.w3.org/2005/Atom')
-  
-  var entries = root.getChildren('entry', atom)
-  for (var i = 0; i < entries.length; i++) {
-    var updated = entries[i].getChild('updated', atom).getText()
-    var date    = Utilities.formatDate(new Date(updated), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss')
-    
-    var content = entries[i].getChild('content', atom).getText()
-    content = content.substr(content.indexOf("【"))
-    content = content.replace('<br />',"\n");
-    var a   = content.substr(content.indexOf("<br />"))
-    content = content.replace(a,"\n");
-    
-    
-    var activity  = XmlService.getNamespace("http://activitystrea.ms/spec/1.0/")
-    var links     = entries[i].getChild('object', activity).getChildren('link', atom)　　　//リンク集を引っ張ってくる
-    var Imagelink = links[2].getAttribute('href').getValue()                              //画像リンクを引っ張ってくる
-    if(Imagelink.slice(-4) !== ".png"){                                                   //画像があるトゥートか(引っ張ってきたURLは.pngなのか)の確認if
-      Imagelink = "";
-    }
-    
-    var URLlink   = links[0].getAttribute('href').getValue()                              //トゥートリンクを引っ張ってくる
-    
-    var difference = (new Date(nowdate) - new Date(date)) / 1000; //(Discordに配信する(プログラムが動く)時間 - NERVがトゥートした時間) / 1000 = 差分 
-    Logger.log(difference); //ログを確認すると秒数が表示される
-    if((60 <= difference)&&(difference < 120)){ //時限トリガーを一分毎にする
-      if(text !== ""){
-        text = "---------------------------------------\n"
+  var root = document.getRootElement()
+
+  var entries = root.getChild('channel').getChildren('item');
+  var count = 0;
+
+
+  for (var i = entries.length - 1; i >= 0; i--) {
+    var date = Utilities.formatDate(new Date(entries[i].getChildText('pubDate')), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+
+    count = 0;
+    var URLlink = entries[i].getChildText('link');                           //トゥートリンクを引っ張ってくる
+    var PostID = URLlink.replace("https://unnerv.jp/@UN_NERV/", "");
+
+    Logger.log(PostID)
+    if (parseInt(PostID) > parseInt(Cache_PostID)) { //時限トリガーを一分毎×2にする
+
+      var content = entries[i].getChildText('description').replace(/<br \/>/g, "\n").replace(/<("[^"]*"|'[^']*'|[^'">])*>/g, '');
+
+      /*Discord 発報文 抽出*/
+      if (content.match(/#NHKニュース速報/) || content.match(/#緊急\s/m) || content.match(/#緊急$/)
+        || content.match(/#ニュース/) || content.match(/#Jアラート/) || content.match(/#地震の震源要素更新/) || content.match(/#津波/)
+        || content.match(/震度５弱/) || content.match(/震度５強/) || content.match(/震度６弱/) || content.match(/震度６強/) || content.match(/震度７/)
+        || content.match(/震度5弱/) || content.match(/震度5強/) || content.match(/震度6弱/) || content.match(/震度6強/) || content.match(/震度7/)) {
+        // 適宜ココの条件は変更する。
+        Logger.log(content);
+        Logger.log("更新対象です");
+
+        
+
+        var Imagelinks = [];
+        var images = entries[i].getChildren('enclosure');
+        for (var j = 0; j < images.length; j++) {
+          Imagelinks.push(images[j].getAttribute('url').getValue());
+        }
+
+        Logger.log(Imagelinks)
+        Logger.log(URLlink)
+        var Write_data_array = [date, content, URLlink, nowdate, Imagelinks];
+        Write_data.push(Write_data_array);
+
+        var temp_PostID = 0;
+        if (PostID > temp_PostID) {
+          temp_PostID = PostID;
+        }
       }
-      var dateNERV = "NERV発信時間:" + date;  //NERVがトゥートした時間のテキスト
-      text = text + content + "\n";
-      message = text;
-      Logger.log(message)
-      Logger.log(Imagelink)
-      Logger.log(URLlink)
-      discord(message,Imagelink,URLlink,Mastodon,dateNERV);  //まとめてDiscordに
-    }else{
-      break
+
+
+    } else {
+
     }
+  }
+
+
+  if (Write_data != "") {
+    DiscordPost_write(Write_data);
+    Cache_PostID = temp_PostID;
+  }
+
+
+
+  Logger.log(Write_data_array);
+  cache.put('Cache_PostID', Cache_PostID, 60 * 60 * 6);
+  Logger.log(Cache_PostID);
+}
+
+function DiscordPost_write(Write_data) {
+  Logger.log(Write_data)
+  var Write_data = Write_data.filter(function (e, index) {
+    return !Write_data.some(function (e2, index2) {
+      return index > index2 && e[0] == e2[0] && e[1] == e2[1] && e[2] == e2[2] && e[3] == e2[3] && e[4] == e2[4];
+    });
+  });
+  Logger.log(Write_data)
+  for (var v = 0; v < Write_data.length; v++) {
+    //Sheet.insertRows(3) //行数増やして、最新順にするようにする
+  }
+  Write_data.sort(function (a, b) { return (b[2].replace("https://unnerv.jp/@UN_NERV/", "") - a[2].replace("https://unnerv.jp/@UN_NERV/", "")); });
+  Logger.log(Write_data)
+  Logger.log(Write_data.length)
+
+  for (var w = Write_data.length - 1; w >= 0; w--) {
+    var dateNERV = "NERV発信時刻:" + Write_data[w][0];  //NERVがトゥートした時間のテキスト
+    var message = Write_data[w][1];
+    var URLlink = Write_data[w][2];
+    var Imagelink = Write_data[w][4][0];
+    var Image_num = Write_data[w][4].length;
+    Logger.log(w)
+
+
+    Logger.log(message, Imagelink, URLlink, dateNERV, Image_num);
+    discord(message, Imagelink, URLlink, dateNERV, Image_num);
   }
 }
 
+
+
 //Discord出力
-function discord(message,Imagelink,URLlink,Mastodon,dateNERV) {//DiscordのWebhook
-  
-  // message = "test";
-  const url        = 'Webhook URL';
-  const token      = 'Webhook URL末尾';
-  const text       = message;
-  const parse      = 'full';
-  const method     = 'post';
-  
-  const payload = {
-    'token'      : token,
-    "content"    : text,
+function discord(message, Imagelink, URLlink, dateNERV, Image_num) {//DiscordのWebhook
+  var secondImage = "";
+  if (Image_num >= 2) {
+    secondImage = "\n他画像データあり";
+  }
+
+  const Icon_url = 'https://media.unnerv.jp/accounts/avatars/000/000/070/original/8111742fb6348b21.png';
+  const method = 'post';
+  const username = '特務機関NERV';
+
+  //message = "test";
+  //if(Postserver == "sushiro" || Postserver == "ANY"){
+  var url = '';    //webhookのURL
+  var token = '';  //webhookのToken
+  var payload = {
+    'token': token,
+    "content": message,
+    'username': username,
+    'avatar_url': Icon_url,
     "embeds": [
       {
         "author": {
-          "name"    : "特務機関NERV",
-          "url"     : Mastodon,     
-          "icon_url": "https://media.unnerv.jp/accounts/avatars/000/000/070/original/8111742fb6348b21.png"
+          "name": username,
+          "url": "https://unnerv.jp",
+          "icon_url": Icon_url
         },
-        "description": "[" + dateNERV + "]("+ URLlink +")",
-        "image"      : { "url" : Imagelink},
+        "description": "[" + dateNERV + "](" + URLlink + ")" + secondImage,
+        "image": { "url": Imagelink },
       }]
   };
-  
-  const params = {
-    'method'  : method,
-    'payload' : JSON.stringify(payload),
-    'headers' : { 'Content-type': 'application/json' },
+
+  var params = {
+    'method': method,
+    'payload': JSON.stringify(payload),
+    'headers': { 'Content-type': 'application/json' },
     'muteHttpExceptions': true
-    
   };
-  
   response = UrlFetchApp.fetch(url, params);
-  
+  //}
+
+
+}
+
+function clear() {
+  cache.put('Cache_PostID', "0", 60 * 60 * 6);
+  Logger.log("リセットしました。");
 }
