@@ -26,7 +26,7 @@ function RSSread() {
     
     
     var activity  = XmlService.getNamespace("http://activitystrea.ms/spec/1.0/")
-    var links     = entries[i].getChild('object', activity).getChildren('link', atom)　　　//リンク集を引っ張ってくる
+    var links = entries[i].getChildren('link', atom)
     var Imagelink = links[2].getAttribute('href').getValue()                              //画像リンクを引っ張ってくる
     if(Imagelink.slice(-4) !== ".png"){                                                   //画像があるトゥートか(引っ張ってきたURLは.pngなのか)の確認if
       Imagelink = "";
